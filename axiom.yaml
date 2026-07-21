@@ -1,0 +1,173 @@
+name: christiangeorgelucas/packagejson-tools
+version: 0.1.0
+language: typescript
+author: Christian George Lucas
+license: MIT
+description: >-
+  Deterministic parsing, inspection, and dependency-specifier analysis of npm
+  `package.json` manifests. Wraps npm's own reference libraries (both ISC):
+  `npm-package-arg` — the exact parser `npm install` uses to turn a
+  dependency specifier ("foo@^1.2.3", "foo@npm:bar@1", a git/github/file/
+  tarball URL) into structured {type, name, fetchSpec, gitRange, ...} — and
+  `validate-npm-package-name`, npm's own package-name validator. Covers the
+  manifest surface liberally: normalized top-level summary, every dependency
+  section (dependencies/devDependencies/peerDependencies/
+  optionalDependencies) individually and combined, single dependency-spec
+  parsing and whole-manifest dependency-type classification for a
+  supply-chain audit, scripts, engines, bin, exports/imports, workspaces,
+  repository/bugs/homepage, package-name validation, ESM/CJS detection,
+  files allowlist, and a two-manifest dependency diff. Every node is a pure,
+  stateless, deterministic function — the manifest is always supplied as
+  text by the caller; no npm registry lookups, no filesystem access, no
+  wall clock, no randomness. Malformed input never crashes a node: a bad
+  manifest returns a structured error, and a single bad dependency spec is
+  reported per-entry, never fatal to the whole manifest.
+tags:
+  - npm
+  - package.json
+  - nodejs
+  - dependencies
+  - manifest
+  - javascript
+  - typescript
+  - supply-chain
+nodes:
+    - name: ParseManifest
+      input: ManifestRequest
+      output: ManifestSummary
+      description: >-
+        Parse a package.json into its normalized top-level summary: name,
+        version, description, main/module/types entry points, license,
+        and the private flag. Fields absent from the source come back at
+        their zero value ("" / false), which is not itself an error — only
+        malformed JSON sets `error`.
+    - name: ListDependencies
+      input: ManifestRequest
+      output: DependencyList
+      description: >-
+        List every dependency declared anywhere in the manifest —
+        dependencies, devDependencies, peerDependencies, and
+        optionalDependencies — each tagged with which section it came from
+        plus its raw (unparsed) specifier string. Use ParseDependencySpec
+        on any entry's raw_spec to decompose it further.
+    - name: GetDependencies
+      input: ManifestRequest
+      output: DependencyMap
+      description: >-
+        Extract just the runtime `dependencies` section as a name -> raw
+        specifier map — the packages this manifest requires at runtime,
+        without dev/peer/optional noise.
+    - name: GetDevDependencies
+      input: ManifestRequest
+      output: DependencyMap
+      description: >-
+        Extract just the `devDependencies` section as a name -> raw
+        specifier map — build/test/tooling-only packages, not shipped at
+        runtime.
+    - name: GetPeerDependencies
+      input: ManifestRequest
+      output: PeerDependencyList
+      description: >-
+        Extract the `peerDependencies` section, each entry annotated with
+        its `peerDependenciesMeta.<name>.optional` flag (false when the
+        manifest declares no meta entry for that name — npm's own
+        default), so an optional peer is distinguishable from a required
+        one without a second lookup.
+    - name: ParseDependencySpec
+      input: DependencySpecRequest
+      output: DependencySpecResult
+      description: >-
+        Parse a single dependency specifier via npm-package-arg — the same
+        parser `npm install` itself uses — into structured form: type
+        (version/range/tag/alias/git/remote/file/directory/workspace),
+        resolved name, normalized raw form, fetch_spec, git host/committish/
+        range when applicable, and whether it resolves against the npm
+        registry. This is the node that classifies WHAT KIND of dependency
+        a specifier is. Supply name+spec (as pulled from a manifest's
+        dependency object) or just a combined "name@spec" string in `spec`.
+        A specifier npm-package-arg cannot parse comes back with `error`
+        set rather than throwing.
+    - name: ClassifyDependencies
+      input: ManifestRequest
+      output: DependencyClassification
+      description: >-
+        Classify every dependency across all four sections by
+        npm-package-arg type (registry version/range/tag, git, file,
+        directory, remote tarball, alias, workspace) and return per-type
+        counts — a one-call supply-chain-composition summary, e.g. "12
+        registry, 2 git, 1 file, 0 workspace". A dependency whose raw_spec
+        itself fails to parse is listed in `unparseable` rather than
+        failing the whole node.
+    - name: ListScripts
+      input: ManifestRequest
+      output: ScriptMap
+      description: >-
+        List every entry in the manifest's `scripts` field as a name ->
+        command map, verbatim.
+    - name: GetEngines
+      input: ManifestRequest
+      output: EngineMap
+      description: >-
+        Extract the declared `engines` field (e.g. {"node": ">=18", "npm":
+        ">=9"}) as a name -> semver-range-string map, verbatim.
+    - name: GetBin
+      input: ManifestRequest
+      output: BinMap
+      description: >-
+        Extract the declared `bin` field, normalized to a command-name ->
+        path map even when the manifest used npm's single-string shorthand
+        (equivalent to naming one command after the package's own name).
+    - name: GetExportsImports
+      input: ManifestRequest
+      output: ExportsImportsResult
+      description: >-
+        Extract the modern `exports` and `imports` entry-point maps.
+        Flattened to a per-subpath list (each entry's nested/conditional
+        target re-serialized as JSON text, since a target can be a string,
+        a conditional object, or an array of fallbacks) plus the raw JSON
+        of each whole field for a caller that wants it unflattened.
+    - name: GetWorkspaces
+      input: ManifestRequest
+      output: WorkspaceList
+      description: >-
+        Detect monorepo status: the declared `workspaces` globs (accepting
+        both the array and the {packages: [...]} object form) and whether
+        a `workspaces` field is present at all.
+    - name: GetRepositoryInfo
+      input: ManifestRequest
+      output: RepositoryInfo
+      description: >-
+        Extract and normalize the `repository`, `bugs`, and `homepage`
+        fields — including npm's shorthand forms ("user/repo",
+        "github:user/repo", a bare bugs URL string) — into plain URL
+        strings.
+    - name: ValidatePackageName
+      input: NameRequest
+      output: NameValidationResult
+      description: >-
+        Validate a string as an npm package name via
+        validate-npm-package-name, npm's own validator — reporting whether
+        it is valid for new publishes, valid for (grandfathered) old
+        packages, and the specific errors/warnings for each.
+    - name: DetectModuleType
+      input: ManifestRequest
+      output: ModuleTypeResult
+      description: >-
+        Detect whether the package is ESM ("type": "module") or CommonJS
+        (Node's implicit default when `type` is absent), reporting whether
+        the manifest set the field explicitly.
+    - name: GetFilesAllowlist
+      input: ManifestRequest
+      output: FilesList
+      description: >-
+        Extract the `files` publish-allowlist field verbatim, in source
+        order. Empty means no allowlist restriction (everything not
+        .npmignore'd publishes), not "publish nothing".
+    - name: DiffManifests
+      input: ManifestDiffRequest
+      output: ManifestDiff
+      description: >-
+        Diff the dependency sets of two package.json manifests across all
+        four sections: which name/section pairs were added, removed, or
+        changed specifier — useful for reviewing what a dependency-change
+        PR actually touches without reading two raw diffs by eye.

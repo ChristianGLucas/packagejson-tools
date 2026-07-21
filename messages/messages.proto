@@ -1,0 +1,393 @@
+// This file defines the data contracts (messages) for your Axiom package.
+// Every node's --input and --output refers to a message defined here.
+//
+// Run `axiom create message <Name>` to scaffold a new message below.
+// Run `axiom generate` to compile these definitions into language bindings in gen/.
+//
+// DOCUMENTATION
+//   Comments written directly above a message or field declaration are extracted
+//   automatically at publish time and shown in the Axiom registry as documentation.
+//   Write your descriptions there — no separate doc files needed.
+//
+//   Leading comment  (no blank line before the declaration) → registry description ✓
+//   Detached comment (blank line before the declaration)    → ignored by registry  ✗
+//
+// This file is yours to edit. Axiom only appends new message blocks — it never
+// overwrites or removes content you have written.
+
+syntax = "proto3";
+
+package christiangeorgelucas.packagejson_tools;
+
+option go_package = ".;gen";
+
+// Data contracts for christiangeorgelucas/packagejson-tools.
+//
+// Deterministic parsing, inspection, and dependency-specifier analysis of
+// npm `package.json` manifests. Every node takes the manifest as a raw JSON
+// text string supplied by the caller — no npm registry lookups, no
+// filesystem access, no wall clock, no randomness. Malformed input never
+// crashes a node: every output message that can fail carries an `error`
+// field, unset on success; a malformed individual dependency spec is
+// reported per-entry (see DependencyClassification.unparseable /
+// ParseDependencySpec.error), never fatal to parsing the whole manifest.
+//
+// Wraps two of npm's own reference libraries (both ISC, from the `npm`
+// GitHub org): `npm-package-arg` — the parser npm itself uses to turn a
+// dependency specifier ("foo@^1.2.3", "foo@npm:bar@1", a git/github/file/
+// tarball URL) into structured form — and `validate-npm-package-name`, npm's
+// own package-name validator. Every text input is capped at 1 MB (checked
+// on raw UTF-8 byte length before any parsing begins).
+//
+// DETERMINISM NOTE on file:/directory: specifiers. npm-package-arg resolves
+// a relative `file:../foo` specifier against a base directory ("where") to
+// produce `fetch_spec`. Calling it with no base would silently resolve
+// against this process's CWD — environment-dependent, not a pure function
+// of the input. Every node that calls npm-package-arg here instead passes a
+// FIXED synthetic base directory ("/package"), so `fetch_spec` for a
+// relative file: spec is a deterministic function of the input alone, not
+// of where the node happens to run. npm-package-arg never touches the real
+// filesystem to do this (no existence check, no fs.stat) — the file/
+// directory distinction is a string heuristic (trailing slash / known
+// archive extension), not an I/O operation.
+
+// A structured, deterministic failure. Unset on success.
+message Error {
+  // Stable machine-readable code, one of:
+  //   INVALID_JSON      — manifest_json is not well-formed JSON.
+  //   TOO_LARGE         — an input text field exceeds the 1 MB size bound.
+  //   INVALID_ARGUMENT  — a non-content argument is wrong or missing (e.g.
+  //                       both `name` and `spec` empty for ParseDependencySpec).
+  //   INTERNAL          — this package itself faulted; the caller's input
+  //                       may be perfectly valid.
+  string code = 1;
+  // Human-readable detail naming what was rejected and why.
+  string message = 2;
+}
+
+// A single dependency line: which section of package.json it came from,
+// its package name (the object key), and its raw, unparsed specifier
+// string (the object value) — e.g. section="devDependencies",
+// name="typescript", raw_spec="^5.4.0".
+message DependencyEntry {
+  // One of: dependencies, devDependencies, peerDependencies,
+  // optionalDependencies.
+  string section = 1;
+  string name = 2;
+  string raw_spec = 3;
+}
+
+// Request shared by every node that reads a single manifest and nothing
+// else (ParseManifest, ListDependencies, GetDependencies, GetDevDependencies,
+// GetPeerDependencies, ListScripts, GetEngines, GetBin, GetExportsImports,
+// GetWorkspaces, GetRepositoryInfo, DetectModuleType, GetFilesAllowlist,
+// ClassifyDependencies).
+message ManifestRequest {
+  // The full package.json text, as-is. Capped at 1 MB.
+  string manifest_json = 1;
+}
+
+// ── ParseManifest ────────────────────────────────────────────────────────
+
+// The normalized top-level summary of a package.json: the fields that
+// identify and locate the package, not its dependency graph (see
+// ListDependencies for that). Fields absent from the source manifest come
+// back as their zero value ("" / false) — that is not itself an error.
+message ManifestSummary {
+  string name = 1;
+  string version = 2;
+  string description = 3;
+  // CommonJS/default entry point.
+  string main = 4;
+  // ESM entry point (bundler convention; not an official npm field but
+  // near-universal in the ecosystem).
+  string module = 5;
+  // TypeScript declaration entry point — package.json's "types" field, or
+  // "typings" (the older alias) when "types" is absent.
+  string types = 6;
+  // SPDX license identifier, or the raw string when the manifest uses the
+  // deprecated `{ "type": "...", "url": "..." }` license object form
+  // (rendered back to its "type" value).
+  string license = 7;
+  // True when `"private": true` — publishing this package to a registry
+  // would be a mistake.
+  bool private = 8;
+  Error error = 9;
+}
+
+// ── ListDependencies ─────────────────────────────────────────────────────
+
+// Every dependency declared anywhere in the manifest — dependencies,
+// devDependencies, peerDependencies, and optionalDependencies — each
+// tagged with which section it came from. Order is: the four sections in
+// that fixed order, and within a section, the key order package.json's own
+// JSON object had (JSON object key order is preserved by JSON.parse).
+message DependencyList {
+  repeated DependencyEntry deps = 1;
+  Error error = 2;
+}
+
+// ── GetDependencies / GetDevDependencies ────────────────────────────────
+
+// A single dependency section's name -> raw-specifier map, verbatim (not
+// parsed). Reused for GetDependencies (the "dependencies" section) and
+// GetDevDependencies (the "devDependencies" section) — same shape, two
+// different sections of the same manifest.
+message DependencyMap {
+  map<string, string> dependencies = 1;
+  Error error = 2;
+}
+
+// ── GetPeerDependencies ──────────────────────────────────────────────────
+
+// One peerDependencies entry, with its peerDependenciesMeta.<name>.optional
+// flag folded in (false when the manifest has no peerDependenciesMeta entry
+// for this name, which is npm's own default).
+message PeerDependencyEntry {
+  string name = 1;
+  string raw_spec = 2;
+  bool optional = 3;
+}
+
+message PeerDependencyList {
+  repeated PeerDependencyEntry peers = 1;
+  Error error = 2;
+}
+
+// ── ParseDependencySpec ──────────────────────────────────────────────────
+
+// A single dependency specifier to parse via npm-package-arg — the same
+// parser `npm install` itself uses. Supply EITHER `name` + `spec` (the
+// package.json object-key / object-value pair, e.g. name="lodash",
+// spec="^4.17.21" — the normal case when parsing an entry pulled from a
+// manifest) OR just `spec` as a combined "name@spec" string with `name`
+// left empty (e.g. spec="lodash@^4.17.21") — the form useful for parsing a
+// specifier typed or pasted as a single string. At least one of `name` /
+// `spec` must be non-empty.
+message DependencySpecRequest {
+  string name = 1;
+  string spec = 2;
+}
+
+// The structured decomposition of one dependency specifier.
+message DependencySpecResult {
+  // One of: version (exact/comparator version), range (semver range), tag
+  // (a dist-tag like "latest"), alias (npm:<pkg>@<spec> — install under one
+  // name, resolve as another), git (any git+.../github:/gitlab:/bitbucket:/
+  // gist: URL), remote (a direct tarball URL), file (a local tarball path),
+  // directory (a local directory path), workspace (a "workspace:" protocol
+  // specifier — reported directly by this package since npm-package-arg
+  // itself does not parse the workspace: protocol; only `type` and `raw`
+  // are populated for this case).
+  string type = 1;
+  // The resolved package name (from `name` if given, else parsed out of a
+  // combined spec).
+  string name = 2;
+  // The full normalized "name@spec" form.
+  string raw = 3;
+  // Meaning depends on `type`: the semver range/version/tag string for
+  // version/range/tag; the URL for git/remote; the resolved path for
+  // file/directory; empty for alias/workspace.
+  string fetch_spec = 4;
+  // git only: the ref/branch/tag/commit after "#", if any.
+  string git_committish = 5;
+  // git only: a semver range constraining which tag the commit-ish may
+  // resolve to (rare; empty for the vast majority of git specifiers).
+  string git_range = 6;
+  // git only: true when the host is one npm recognizes specially (github,
+  // gitlab, bitbucket, gist) and can shorthand.
+  bool hosted = 7;
+  // git only: the recognized host name when `hosted` is true (e.g.
+  // "github"), else "".
+  string host_type = 8;
+  // True for version/range/tag/alias — the specifier resolves against an
+  // npm registry rather than git/a URL/the local filesystem.
+  bool registry = 9;
+  // The npm scope, e.g. "@myorg", or "" when the name is unscoped.
+  string scope = 10;
+  // alias only: the target "name@spec" the specifier aliases to (e.g.
+  // "npm:bar@1.2.3" -> sub_spec="bar@1.2.3").
+  string sub_spec = 11;
+  Error error = 12;
+}
+
+// ── ClassifyDependencies ─────────────────────────────────────────────────
+
+// How many of the manifest's dependencies (across all four sections) parsed
+// to each npm-package-arg `type` — a one-call supply-chain-composition
+// summary (e.g. "3 registry, 1 git, 1 file, 0 workspace").
+message ClassificationCount {
+  string type = 1;
+  int32 count = 2;
+}
+
+message DependencyClassification {
+  repeated ClassificationCount counts = 1;
+  // Total dependencies examined, across all four sections.
+  int32 total = 2;
+  // Entries whose raw_spec itself failed to parse under npm-package-arg —
+  // reported here rather than failing the whole node, so one bad entry
+  // never hides the classification of the rest.
+  repeated DependencyEntry unparseable = 3;
+  // Set only when manifest_json itself is not valid JSON; `counts` and
+  // `unparseable` are empty in that case.
+  Error error = 4;
+}
+
+// ── ListScripts ──────────────────────────────────────────────────────────
+
+message ScriptMap {
+  map<string, string> scripts = 1;
+  Error error = 2;
+}
+
+// ── GetEngines ────────────────────────────────────────────────────────────
+
+// The declared `engines` field verbatim, e.g. {"node": ">=18", "npm":
+// ">=9"} — each value is a semver-range string in the same syntax
+// christiangeorgelucas/semver-tools' range nodes (SatisfiesRange,
+// ValidateRange, MinVersion) already accept, so a flow can pipe an engines
+// value from here straight into one of those without reformatting.
+message EngineMap {
+  map<string, string> engines = 1;
+  Error error = 2;
+}
+
+// ── GetBin ────────────────────────────────────────────────────────────────
+
+// The declared `bin` field, normalized to a command-name -> path map even
+// when the source used npm's single-string shorthand (`"bin": "./cli.js"`,
+// equivalent to `{"<package name>": "./cli.js"}`).
+message BinMap {
+  map<string, string> bin = 1;
+  Error error = 2;
+}
+
+// ── GetExportsImports ────────────────────────────────────────────────────
+
+// One subpath's exports/imports target. `target_json` is that subpath's
+// raw value re-serialized as JSON text, because a target can be a plain
+// string, a nested conditional object ({"import": ..., "require": ...}),
+// or an array of fallbacks — an irregular, recursively-defined shape that a
+// flat proto field cannot represent generically.
+message ExportsEntry {
+  // The subpath key exactly as written, e.g. ".", "./feature",
+  // "./package.json". For the legacy single-target form
+  // (`"exports": "./index.js"`), subpath is ".".
+  string subpath = 1;
+  string target_json = 2;
+}
+
+message ExportsImportsResult {
+  repeated ExportsEntry exports = 1;
+  repeated ExportsEntry imports = 2;
+  // The whole `exports` value re-serialized as JSON text, for a caller that
+  // wants it unflattened. "" when the manifest has no `exports` field.
+  string exports_raw_json = 3;
+  // The whole `imports` value re-serialized as JSON text. "" when absent.
+  string imports_raw_json = 4;
+  Error error = 5;
+}
+
+// ── GetWorkspaces ─────────────────────────────────────────────────────────
+
+message WorkspaceList {
+  // The declared workspace globs verbatim, in source order. Supports both
+  // the array form (`"workspaces": ["packages/*"]`) and the object form
+  // (`"workspaces": {"packages": ["packages/*"]}`).
+  repeated string globs = 1;
+  // True whenever a `workspaces` field is present at all (even an empty
+  // array) — the manifest declares itself a monorepo root.
+  bool is_monorepo = 2;
+  Error error = 3;
+}
+
+// ── GetRepositoryInfo ─────────────────────────────────────────────────────
+
+message RepositoryInfo {
+  // Normalized to a plain URL string even when the manifest used the
+  // shorthand form (`"repository": "github:user/repo"` or
+  // `"user/repo"` -> "https://github.com/user/repo").
+  string repository_url = 1;
+  // e.g. "git". "" when the manifest gave only a shorthand/bare URL.
+  string repository_type = 2;
+  // The `directory` field of a monorepo-scoped repository object, or "".
+  string repository_directory = 3;
+  // Normalized from either `bugs` as a string URL or `bugs.url`.
+  string bugs_url = 4;
+  string bugs_email = 5;
+  string homepage = 6;
+  Error error = 7;
+}
+
+// ── ValidatePackageName ──────────────────────────────────────────────────
+
+message NameRequest {
+  string name = 1;
+}
+
+// npm's own validity check (validate-npm-package-name), split into the
+// two-tier rule set the library itself enforces: `valid_for_new_packages`
+// is the strict modern rule set; a name can be `valid_for_old_packages`
+// (grandfathered, e.g. a legacy mixed-case name) without being valid for a
+// brand-new publish.
+message NameValidationResult {
+  bool valid_for_new_packages = 1;
+  bool valid_for_old_packages = 2;
+  // Hard violations (e.g. "name cannot start with a period").
+  repeated string errors = 3;
+  // Soft violations that only block NEW packages (e.g. "name can no longer
+  // contain capital letters").
+  repeated string warnings = 4;
+}
+
+// ── DetectModuleType ──────────────────────────────────────────────────────
+
+message ModuleTypeResult {
+  // "module" (ESM) or "commonjs" — npm's own default when `type` is absent.
+  string module_type = 1;
+  // True when the manifest explicitly set a `type` field; false when this
+  // is Node's implicit "commonjs" default.
+  bool explicit = 2;
+  Error error = 3;
+}
+
+// ── GetFilesAllowlist ─────────────────────────────────────────────────────
+
+message FilesList {
+  // The declared `files` allowlist verbatim, in source order. Empty when
+  // absent (meaning: no allowlist restriction, not "publish nothing").
+  repeated string files = 1;
+  Error error = 2;
+}
+
+// ── DiffManifests ─────────────────────────────────────────────────────────
+
+message ManifestDiffRequest {
+  string manifest_json_a = 1;
+  string manifest_json_b = 2;
+}
+
+// One dependency-level change between manifest A and manifest B.
+message DependencyChange {
+  string section = 1;
+  string name = 2;
+  // "" for an added entry (nothing to compare from).
+  string old_spec = 3;
+  // "" for a removed entry (nothing to compare to).
+  string new_spec = 4;
+  // One of: added, removed, changed.
+  string change_type = 5;
+}
+
+message ManifestDiff {
+  // Present in B, absent in A.
+  repeated DependencyChange added = 1;
+  // Present in A, absent in B.
+  repeated DependencyChange removed = 2;
+  // Present in both, with a different raw_spec.
+  repeated DependencyChange changed = 3;
+  // Set when EITHER manifest_json_a or manifest_json_b fails to parse as
+  // JSON; unset on success.
+  Error error = 4;
+}
