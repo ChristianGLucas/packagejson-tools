@@ -1,7 +1,7 @@
 # christiangeorgelucas/packagejson-tools
 
 Deterministic parsing, inspection, and dependency-specifier analysis of npm
-`package.json` manifests, for the [Axiom](https://axiom.dev) marketplace.
+`package.json` manifests, for the [Axiom](https://axiomide.com) marketplace.
 
 Every node is a pure, stateless, deterministic function: the manifest is
 always supplied as JSON text by the caller. No npm registry lookups, no
