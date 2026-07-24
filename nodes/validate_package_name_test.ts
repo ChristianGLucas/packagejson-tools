@@ -1,7 +1,6 @@
 import { NameRequest } from '../gen/messages_pb';
 import { validatePackageName } from './validate_package_name';
 import { testContext } from './testctx';
-import { MAX_BYTES } from './helpers';
 
 function mkReq(name: string): NameRequest {
   const r = new NameRequest();
@@ -52,8 +51,10 @@ describe('ValidatePackageName', () => {
     expect(result.getErrorsList().length).toBeGreaterThan(0);
   });
 
-  it('treats an oversized name as invalid (TOO_LARGE surfaced in errors) rather than crashing', () => {
-    const result = validatePackageName(testContext, mkReq('a'.repeat(MAX_BYTES + 1)));
+  it('treats a very long name as invalid (npm\'s own 214-char rule) rather than crashing', () => {
+    // No payload-length cap is imposed by this node -- validate-npm-package-name's
+    // own naming rules (max 214 chars) are what reject this, not us.
+    const result = validatePackageName(testContext, mkReq('a'.repeat(2000)));
     expect(result.getValidForNewPackages()).toBe(false);
     expect(result.getValidForOldPackages()).toBe(false);
     expect(result.getErrorsList().length).toBeGreaterThan(0);

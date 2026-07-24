@@ -1,6 +1,6 @@
 import { DependencySpecRequest, DependencySpecResult } from '../gen/messages_pb';
 import { AxiomContext } from '../gen/axiomContext';
-import { isTooLarge, mkError, parseSpec, tooLargeError } from './helpers';
+import { mkError, parseSpec } from './helpers';
 
 /**
  * Parse a single dependency specifier via npm-package-arg — the same
@@ -18,10 +18,6 @@ export function parseDependencySpec(ax: AxiomContext, input: DependencySpecReque
   const name = input.getName();
   const spec = input.getSpec();
 
-  if (isTooLarge(name) || isTooLarge(spec)) {
-    result.setError(tooLargeError());
-    return result;
-  }
   if (!name && !spec) {
     result.setError(mkError('INVALID_ARGUMENT', 'at least one of `name` / `spec` must be non-empty'));
     return result;

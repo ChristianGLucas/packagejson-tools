@@ -1,18 +1,12 @@
 // Shared parsing logic for all packagejson-tools nodes. Every node file is a
 // thin wrapper: decode proto input -> call a helper -> encode proto output.
 // Keeping the manifest-reading and npm-package-arg-calling logic here (once)
-// is what keeps every node's error handling and size bound consistent.
+// is what keeps every node's error handling consistent. Payload size is the
+// platform's job, not this package's — no node here imposes a byte-size cap.
 
 import npa = require('npm-package-arg');
 import validateName = require('validate-npm-package-name');
 import { Error as PjError } from '../gen/messages_pb';
-
-// Every node caps its raw UTF-8 manifest/text input at this many bytes,
-// checked before any parsing begins. Real-world package.json files are
-// almost always under a few hundred KB even with a large dependency list;
-// 1 MB is generous headroom while still bounding cost as a function of the
-// one dimension every node here takes from the caller: input text length.
-export const MAX_BYTES = 1_000_000;
 
 // Fixed synthetic base directory passed to every npm-package-arg call that
 // might resolve a relative file:/directory specifier. Without an explicit
@@ -21,23 +15,11 @@ export const MAX_BYTES = 1_000_000;
 // fixed base makes fetch_spec a deterministic function of the input alone.
 export const FIXED_WHERE = '/package';
 
-export function byteLength(text: string): number {
-  return Buffer.byteLength(text, 'utf8');
-}
-
-export function isTooLarge(text: string): boolean {
-  return byteLength(text) > MAX_BYTES;
-}
-
 export function mkError(code: string, message: string): PjError {
   const e = new PjError();
   e.setCode(code);
   e.setMessage(message);
   return e;
-}
-
-export function tooLargeError(): PjError {
-  return mkError('TOO_LARGE', `input exceeds ${MAX_BYTES} byte limit`);
 }
 
 export function invalidJsonError(detail: string): PjError {
@@ -64,13 +46,10 @@ export function fail(code: string, message: string): never {
 // than assuming a well-formed manifest.
 export type Manifest = Record<string, unknown>;
 
-// Parse manifest_json, bounded and defended: TOO_LARGE before parsing,
-// INVALID_JSON on a JSON syntax error, and a rejection when the top-level
-// value parses but is not a JSON object (a package.json must be one).
+// Parse manifest_json, defended against: INVALID_JSON on a JSON syntax
+// error, and a rejection when the top-level value parses but is not a JSON
+// object (a package.json must be one).
 export function parseManifestJson(text: string): Manifest {
-  if (isTooLarge(text)) {
-    throw new PjNodeError(tooLargeError());
-  }
   let value: unknown;
   try {
     value = JSON.parse(text);

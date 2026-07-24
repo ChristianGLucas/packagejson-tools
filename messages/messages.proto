@@ -36,8 +36,8 @@ option go_package = ".;gen";
 // GitHub org): `npm-package-arg` — the parser npm itself uses to turn a
 // dependency specifier ("foo@^1.2.3", "foo@npm:bar@1", a git/github/file/
 // tarball URL) into structured form — and `validate-npm-package-name`, npm's
-// own package-name validator. Every text input is capped at 1 MB (checked
-// on raw UTF-8 byte length before any parsing begins).
+// own package-name validator. Payload size is the platform's job, not this
+// package's — no node here imposes a byte-size cap.
 //
 // DETERMINISM NOTE on file:/directory: specifiers. npm-package-arg resolves
 // a relative `file:../foo` specifier against a base directory ("where") to
@@ -55,7 +55,6 @@ option go_package = ".;gen";
 message Error {
   // Stable machine-readable code, one of:
   //   INVALID_JSON      — manifest_json is not well-formed JSON.
-  //   TOO_LARGE         — an input text field exceeds the 1 MB size bound.
   //   INVALID_ARGUMENT  — a non-content argument is wrong or missing (e.g.
   //                       both `name` and `spec` empty for ParseDependencySpec).
   //   INTERNAL          — this package itself faulted; the caller's input
@@ -83,7 +82,7 @@ message DependencyEntry {
 // GetWorkspaces, GetRepositoryInfo, DetectModuleType, GetFilesAllowlist,
 // ClassifyDependencies).
 message ManifestRequest {
-  // The full package.json text, as-is. Capped at 1 MB.
+  // The full package.json text, as-is.
   string manifest_json = 1;
 }
 

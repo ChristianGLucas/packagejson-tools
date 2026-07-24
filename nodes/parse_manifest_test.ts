@@ -2,7 +2,6 @@ import { ManifestRequest } from '../gen/messages_pb';
 import { parseManifest } from './parse_manifest';
 import { testContext } from './testctx';
 import { RICH_MANIFEST, RICH_MANIFEST_JSON, MINIMAL_MANIFEST_JSON, LEGACY_FORMS_MANIFEST_JSON, NOT_JSON, JSON_ARRAY } from './fixtures';
-import { MAX_BYTES } from './helpers';
 
 function mkReq(json: string): ManifestRequest {
   const r = new ManifestRequest();
@@ -49,10 +48,12 @@ describe('ParseManifest', () => {
     expect(result.getError()?.getCode()).toBe('INVALID_JSON');
   });
 
-  it('reports TOO_LARGE for an oversized manifest instead of parsing it', () => {
-    const huge = JSON.stringify({ name: 'x', version: '1.0.0', description: 'a'.repeat(MAX_BYTES + 1) });
+  it('parses a large manifest without crashing (no payload-size limit)', () => {
+    const huge = JSON.stringify({ name: 'x', version: '1.0.0', description: 'a'.repeat(2_000_001) });
     const result = parseManifest(testContext, mkReq(huge));
-    expect(result.getError()?.getCode()).toBe('TOO_LARGE');
+    expect(result.getError()).toBeUndefined();
+    expect(result.getName()).toBe('x');
+    expect(result.getVersion()).toBe('1.0.0');
   });
 
   it('is deterministic: same input twice yields identical output', () => {
